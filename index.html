@@ -8,6 +8,7 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
 html{color-scheme:light}body{margin:0}img{max-width:100%}[hidden]{display:none!important}
 /* Layout: one column of worksheet sections; a sticky result strip keeps the monthly balance visible while editing. */
@@ -98,7 +99,8 @@ textarea{width:100%;min-height:110px;font:inherit;color:var(--fg);background:var
 .status.on .dot{background:var(--good)}
 
 .drop{border:1px dashed var(--line);border-radius:10px;padding:16px;text-align:center;color:var(--muted);font-size:.9rem;cursor:pointer}
-.drop:hover{background:var(--accent-soft);color:var(--accent)}
+.drop:hover,.drop.over{background:var(--accent-soft);color:var(--accent)}
+.drop{padding:28px 16px;font-size:1rem}
 .drop input{display:none}
 .analysis{white-space:pre-wrap;font-size:.95rem;margin-top:12px;padding:12px;border-radius:10px;background:var(--bg);min-height:1.5em}
 .analysis:empty{display:none}
@@ -118,6 +120,14 @@ footer{color:var(--muted);font-size:.8rem;margin-top:24px;max-width:62ch}
   <p class="lead">Lo que entra, lo que sale y lo que queda, en una sola hoja.</p>
   <div class="status on" id="status"><span class="dot"></span><span id="statusText">Se guarda automáticamente en este navegador</span></div>
 </header>
+
+<section class="block" id="pdfBlock" hidden>
+  <div class="block-head"><h2>Empieza con tus documentos</h2></div>
+  <p class="hint">Arrastra cartolas, estados de cuenta o planillas (PDF, Excel o CSV), uno o varios. Se buscan los montos y los eliges para agregarlos a la hoja. Los archivos no salen de tu computador.</p>
+  <label class="drop" id="drop">Elegir archivos o arrastrarlos aquí<input type="file" id="pdfInput" accept=".pdf,.xlsx,.xls,.csv,application/pdf" multiple></label>
+  <div class="toast" id="pdfToast"></div>
+  <div class="found" id="found"></div>
+</section>
 
 <div class="result" id="result">
   <div><div class="label">Cada mes</div><div class="big" id="gapBig">$0</div></div>
@@ -182,14 +192,6 @@ footer{color:var(--muted);font-size:.8rem;margin-top:24px;max-width:62ch}
     <span>más, durante</span><input type="number" id="sMonths" min="0" step="1" placeholder="0" class="short" aria-label="Cantidad de meses"><span>meses…</span>
   </div>
   <div class="scen-out" id="scenOut"></div>
-</section>
-
-<section class="block" id="pdfBlock" hidden>
-  <div class="block-head"><h2>Leer un estado de cuenta</h2></div>
-  <p class="hint">Sube el PDF de una cartola o estado de cuenta. Se buscan los montos para que los agregues con un clic. El archivo no sale de tu computador.</p>
-  <label class="drop" id="drop">Elegir PDF o arrastrarlo aquí<input type="file" id="pdfInput" accept="application/pdf"></label>
-  <div class="toast" id="pdfToast"></div>
-  <div class="found" id="found"></div>
 </section>
 
 
@@ -340,48 +342,63 @@ if(window.pdfjsLib){
   $('pdfBlock').hidden=false;
   window.pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
   const money=/\$?\s?(\d{1,3}(?:\.\d{3})+|\d{4,})(?:,\d{2})?/;
-  async function readPdf(file){
-    const t=$('pdfToast'),found=$('found');found.innerHTML='';t.textContent='Leyendo el PDF…';
-    try{
-      const buf=await file.arrayBuffer();const pdf=await window.pdfjsLib.getDocument({data:buf}).promise;
+  async function fileText(file){
+    const name=file.name.toLowerCase();
+    if(name.endsWith('.pdf')||file.type==='application/pdf'){
+      const pdf=await window.pdfjsLib.getDocument({data:await file.arrayBuffer()}).promise;
       const lines=[];
-      for(let p=1;p<=Math.min(pdf.numPages,12);p++){
+      for(let p=1;p<=Math.min(pdf.numPages,15);p++){
         const pg=await pdf.getPage(p);const c=await pg.getTextContent();
         const byY={};c.items.forEach(i=>{if(!i.str.trim())return;const y=Math.round(i.transform[5]/3);(byY[y]=byY[y]||[]).push({x:i.transform[4],s:i.str})});
         Object.keys(byY).sort((a,b)=>b-a).forEach(y=>lines.push(byY[y].sort((a,b)=>a.x-b.x).map(i=>i.s).join(' ')));
       }
-      const items=[];
+      return lines;
+    }
+    if(/\.(xlsx|xls|csv)$/.test(name)&&window.XLSX){
+      const wb=window.XLSX.read(await file.arrayBuffer(),{type:'array'});
+      return wb.SheetNames.flatMap(n=>window.XLSX.utils.sheet_to_csv(wb.Sheets[n]).split('\n').map(l=>l.replace(/,/g,' ')));
+    }
+    return (await file.text()).split('\n');
+  }
+  async function readFiles(files){
+    const t=$('pdfToast'),found=$('found');found.innerHTML='';
+    const list=[...files].filter(f=>/\.(pdf|xlsx|xls|csv|txt)$/i.test(f.name));
+    if(!list.length){t.textContent='Solo se pueden leer PDF, Excel o CSV.';return}
+    const items=[];
+    for(let i=0;i<list.length;i++){
+      t.textContent='Leyendo '+list[i].name+' ('+(i+1)+' de '+list.length+')…';
+      let lines=[];try{lines=await fileText(list[i])}catch(e){continue}
       lines.forEach(l=>{
         const m=l.match(money);if(!m)return;
         const amt=parseInt(m[1].replace(/\./g,''),10);if(!amt||amt<1000||amt>50000000)return;
         let name=l.slice(0,m.index).replace(/\d{1,2}[\/\-]\d{1,2}([\/\-]\d{2,4})?/g,'').replace(/\s+/g,' ').trim();
         if(name.length<3)return;name=name.slice(0,40);
         const low=name.toLowerCase();
-        const k=/abono|dep[oó]sito|sueldo|remuner|transferencia recibida|pago recibido/.test(low)?'in':/cuota|cr[eé]dito|pr[eé]stamo|tarjeta|pago tarjeta|pac /.test(low)?'debt':/arriendo|dividendo|luz|agua|gas|internet|tel[eé]fono|colegio|seguro|plan /.test(low)?'fix':'var';
+        const k=/abono|dep[oó]sito|sueldo|remuner|transferencia recibida|pago recibido|honorario/.test(low)?'in':/cuota|cr[eé]dito|pr[eé]stamo|tarjeta|pago tarjeta|pac /.test(low)?'debt':/arriendo|dividendo|luz|agua|gas|internet|tel[eé]fono|colegio|seguro|plan /.test(low)?'fix':'var';
         if(!items.some(x=>x.n===name&&x.a===amt))items.push({n:name,a:amt,k});
       });
-      if(!items.length){t.textContent='No se encontraron montos legibles en este PDF (puede ser una imagen escaneada).';return}
-      t.textContent='Encontrado. Marca lo que quieras agregar; puedes corregir después en la hoja.';
-      const labels={fix:'fijo',debt:'deuda',var:'variable',in:'ingreso'};
-      items.slice(0,40).forEach(it=>{
-        const row=document.createElement('label');row.className='item';
-        const cb=document.createElement('input');cb.type='checkbox';cb.checked=it.k!=='var';
-        const nm=document.createElement('span');const cat=document.createElement('span');cat.className='cat';cat.textContent=labels[it.k];nm.append(cat,' '+it.n);
-        const v=document.createElement('span');v.className='v';v.textContent=fmt(it.a);
-        row.append(cb,nm,v);row.dataset.k=it.k;row.dataset.n=it.n;row.dataset.a=String(it.a);found.append(row);
-      });
-      const addBtn=document.createElement('button');addBtn.className='btn primary';addBtn.type='button';addBtn.textContent='Agregar a la hoja';
-      addBtn.addEventListener('click',()=>{
-        found.querySelectorAll('.item').forEach(r=>{if(!r.querySelector('input').checked)return;const k=r.dataset.k;st[k]=(st[k]||[]).filter(x=>x.n||x.a);st[k].push(k==='debt'?{n:r.dataset.n,a:+r.dataset.a,s:0}:{n:r.dataset.n,a:+r.dataset.a})});
-        save();render();found.innerHTML='';t.textContent='Agregado. Revisa los montos y, en las deudas, completa el saldo.';
-      });
-      found.append(addBtn);
-    }catch(e){t.textContent='No se pudo leer este PDF.'}
+    }
+    if(!items.length){t.textContent='No se encontraron montos legibles (si son PDF escaneados, prueba con el archivo original o una planilla).';return}
+    t.textContent='Encontrado. Marca lo que quieras agregar; puedes corregir después en la hoja.';
+    const labels={fix:'fijo',debt:'deuda',var:'variable',in:'ingreso'};
+    items.slice(0,60).forEach(it=>{
+      const row=document.createElement('label');row.className='item';
+      const cb=document.createElement('input');cb.type='checkbox';cb.checked=it.k!=='var';
+      const nm=document.createElement('span');const cat=document.createElement('span');cat.className='cat';cat.textContent=labels[it.k];nm.append(cat,' '+it.n);
+      const v=document.createElement('span');v.className='v';v.textContent=fmt(it.a);
+      row.append(cb,nm,v);row.dataset.k=it.k;row.dataset.n=it.n;row.dataset.a=String(it.a);found.append(row);
+    });
+    const addBtn=document.createElement('button');addBtn.className='btn primary';addBtn.type='button';addBtn.textContent='Agregar a la hoja';
+    addBtn.addEventListener('click',()=>{
+      found.querySelectorAll('.item').forEach(r=>{if(!r.querySelector('input').checked)return;const k=r.dataset.k;st[k]=(st[k]||[]).filter(x=>x.n||x.a);st[k].push(k==='debt'?{n:r.dataset.n,a:+r.dataset.a,s:0}:{n:r.dataset.n,a:+r.dataset.a})});
+      save();render();found.innerHTML='';t.textContent='Agregado. Revisa los montos y, en las deudas, completa el saldo.';
+    });
+    found.append(addBtn);
   }
-  $('pdfInput').addEventListener('change',e=>{const f=e.target.files[0];if(f)readPdf(f);e.target.value=''});
+  $('pdfInput').addEventListener('change',e=>{if(e.target.files.length)readFiles(e.target.files);e.target.value=''});
   const drop=$('drop');
   drop.addEventListener('dragover',e=>{e.preventDefault()});
-  drop.addEventListener('drop',e=>{e.preventDefault();const f=e.dataTransfer.files[0];if(f&&f.type==='application/pdf')readPdf(f)});
+  drop.addEventListener('drop',e=>{e.preventDefault();if(e.dataTransfer.files.length)readFiles(e.dataTransfer.files)});
 }
 })();
 </script>
