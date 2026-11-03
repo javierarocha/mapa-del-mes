@@ -110,9 +110,25 @@ textarea{width:100%;min-height:110px;font:inherit;color:var(--fg);background:var
 .found .cat{font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;color:var(--accent);background:var(--accent-soft);padding:2px 6px;border-radius:4px}
 footer{color:var(--muted);font-size:.8rem;margin-top:24px;max-width:62ch}
 @media (prefers-reduced-motion:reduce){.bar .fill{transition:none}}
+
+.gate{position:fixed;inset:0;z-index:50;background:var(--bg);display:grid;place-items:center;padding:16px}
+.gate form{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:24px;width:min(100%,360px);display:grid;gap:12px}
+.gate h2{font-size:1.2rem}
+.gate p{margin:0;color:var(--muted);font-size:.9rem}
+.gate input{font:inherit;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg);width:100%}
+.gate .err{color:var(--bad);font-size:.85rem;min-height:1.2em}
 </style>
 </head>
-<body>
+<body><div class="gate" id="gate">
+  <form id="gateForm">
+    <h2>Mapa del mes</h2>
+    <p>Escribe la contraseña para entrar.</p>
+    <input type="password" id="gatePass" autocomplete="current-password" placeholder="Contraseña" aria-label="Contraseña">
+    <div class="err" id="gateErr"></div>
+    <button class="btn primary" type="submit">Entrar</button>
+  </form>
+</div>
+
 
 <div class="wrap">
 <header>
@@ -211,6 +227,23 @@ footer{color:var(--muted);font-size:.8rem;margin-top:24px;max-width:62ch}
 <footer>Montos en pesos chilenos. Los datos quedan solo en este navegador.</footer>
 </div>
 
+<script>
+(function(){
+const HASH='2789943fe29eb47f38a16206ba303002b72edfce9f79a1d175c963292bdc1073';
+const KEY='mapa-del-mes-gate';
+async function sha(s){const b=new TextEncoder().encode(s);const h=await crypto.subtle.digest('SHA-256',b);return [...new Uint8Array(h)].map(x=>x.toString(16).padStart(2,'0')).join('')}
+const gate=document.getElementById('gate');
+try{if(localStorage.getItem(KEY)===HASH){gate.remove()}}catch(e){}
+document.getElementById('gateForm').addEventListener('submit',async e=>{
+  e.preventDefault();
+  const v=document.getElementById('gatePass').value.trim().toLowerCase().replace(/\s+/g,' ');
+  if(!v)return;
+  const h=await sha(v);
+  if(h===HASH){try{localStorage.setItem(KEY,HASH);localStorage.setItem('mapa-del-mes-code',v)}catch(e){}gate.remove()}
+  else{document.getElementById('gateErr').textContent='Contraseña incorrecta.'}
+});
+})();
+</script>
 <script>
 (function(){
 const $=id=>document.getElementById(id);
