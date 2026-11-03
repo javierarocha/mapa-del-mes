@@ -319,7 +319,56 @@ $('copyBtn').addEventListener('click',()=>{
 });
 render();
 
-// ---------- static site: email, PDF download, PDF reading (heuristic) ----------
+// ---------- static site: email, PDF download, document reading ----------
+const BACKEND_URL=''; // URL del Worker de análisis (ver worker/README.md). Vacío = lectura por patrones, sin IA.
+const CODE_KEY='mapa-del-mes-code';
+function mergeInto(kind,items){
+  st[kind]=(st[kind]||[]).filter(x=>(x.n&&x.a)||(x.a>0));
+  let n=0;(items||[]).forEach(it=>{const nm=String(it.n||'').slice(0,60),a=Math.round(+it.a||0);if(!nm||!a)return;
+    if(st[kind].some(x=>x.n===nm&&x.a===a))return;
+    st[kind].push(kind==='debt'?{n:nm,a,s:Math.round(+it.s||0)}:{n:nm,a});n++});
+  if(!st[kind].length)st[kind].push(kind==='debt'?{n:'',a:0,s:0}:{n:'',a:0});
+  return n;
+}
+function toB64(buf){let s='';const b=new Uint8Array(buf);for(let i=0;i<b.length;i+=0x8000)s+=String.fromCharCode.apply(null,b.subarray(i,i+0x8000));return btoa(s)}
+function askCode(){
+  return new Promise(res=>{
+    const t=$('pdfToast'),found=$('found');found.innerHTML='';
+    t.textContent='Escribe el código de acceso que te dieron para analizar documentos:';
+    const wrap=document.createElement('div');wrap.className='toolbar';
+    const inp=document.createElement('input');inp.type='text';inp.id='accessCode';inp.placeholder='Código';inp.style.cssText='font:inherit;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg)';
+    const ok=document.createElement('button');ok.className='btn primary';ok.type='button';ok.textContent='Continuar';
+    ok.addEventListener('click',()=>{const v=inp.value.trim();if(!v)return;try{localStorage.setItem(CODE_KEY,v)}catch(e){}found.innerHTML='';res(v)});
+    inp.addEventListener('keydown',e=>{if(e.key==='Enter')ok.click()});
+    wrap.append(inp,ok);found.append(wrap);inp.focus();
+  });
+}
+async function analyzeWithBackend(files){
+  const t=$('pdfToast');
+  let code='';try{code=localStorage.getItem(CODE_KEY)||''}catch(e){}
+  if(!code)code=await askCode();
+  const payload=[];
+  for(let i=0;i<files.length;i++){
+    const f=files[i];t.textContent='Preparando '+f.name+' ('+(i+1)+' de '+files.length+')…';
+    try{
+      if(/\.pdf$/i.test(f.name)||f.type==='application/pdf')payload.push({name:f.name,pdf:toB64(await f.arrayBuffer())});
+      else if(/\.(xlsx|xls|csv)$/i.test(f.name)&&window.XLSX){const wb=window.XLSX.read(await f.arrayBuffer(),{type:'array'});payload.push({name:f.name,text:wb.SheetNames.map(n=>'HOJA '+n+'\n'+window.XLSX.utils.sheet_to_csv(wb.Sheets[n])).join('\n\n')})}
+      else payload.push({name:f.name,text:await f.text()});
+    }catch(e){}
+  }
+  if(!payload.length){t.textContent='No se pudieron leer los archivos.';return}
+  t.textContent='Analizando '+payload.length+' archivo'+(payload.length>1?'s':'')+'… suele tardar entre 20 segundos y un minuto.';
+  let res;
+  try{res=await fetch(BACKEND_URL,{method:'POST',headers:{'Content-Type':'application/json','X-Access-Code':code},body:JSON.stringify({files:payload})})}
+  catch(e){t.textContent='No se pudo conectar con el análisis. Revisa tu conexión e inténtalo de nuevo.';return}
+  if(res.status===401){try{localStorage.removeItem(CODE_KEY)}catch(e){}t.textContent='Código incorrecto. Vuelve a arrastrar los archivos y escríbelo de nuevo.';return}
+  if(!res.ok){const m={413:'Los archivos son demasiado grandes (máximo 20 MB en total).',422:'No se pudo analizar este contenido.',403:'Esta página no está autorizada para usar el análisis.'};t.textContent=m[res.status]||'El análisis falló. Inténtalo de nuevo en un momento.';return}
+  const data=await res.json();const r=data.result||{};
+  let n=0;['in','varin','fix','debt','var'].forEach(k=>{n+=mergeInto(k,r[k])});
+  save();render();
+  t.textContent=(n?'Listo: se completaron '+n+' filas. ':'No se encontraron movimientos claros. ')+(r.resumen?String(r.resumen):'')+(n?' Revisa los montos y completa los saldos de las deudas.':'');
+  if(n)window.scrollTo({top:$('result').offsetTop-8,behavior:'smooth'});
+}
 const DESTINATARIO=''; // correo al que se envía la hoja; vacío = la persona lo escribe
 const sendBtn=$('sendBtn');sendBtn.hidden=false;
 sendBtn.addEventListener('click',()=>{
@@ -364,6 +413,7 @@ if(window.pdfjsLib){
     const t=$('pdfToast'),found=$('found');found.innerHTML='';
     const list=[...files].filter(f=>/\.(pdf|xlsx|xls|csv|txt)$/i.test(f.name));
     if(!list.length){t.textContent='Solo se pueden leer PDF, Excel o CSV.';return}
+    if(BACKEND_URL){return analyzeWithBackend(list)}
     const items=[];
     for(let i=0;i<list.length;i++){
       t.textContent='Leyendo '+list[i].name+' ('+(i+1)+' de '+list.length+')…';
