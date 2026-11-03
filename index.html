@@ -229,14 +229,14 @@ footer{color:var(--muted);font-size:.8rem;margin-top:24px;max-width:62ch}
 
 <script>
 (function(){
-const HASH='2789943fe29eb47f38a16206ba303002b72edfce9f79a1d175c963292bdc1073';
+const HASH='27fd801792369e616cdb4751eaf73bd33c99deddd42ede295403247f65f9d65e';
 const KEY='mapa-del-mes-gate';
 async function sha(s){const b=new TextEncoder().encode(s);const h=await crypto.subtle.digest('SHA-256',b);return [...new Uint8Array(h)].map(x=>x.toString(16).padStart(2,'0')).join('')}
 const gate=document.getElementById('gate');
 try{if(localStorage.getItem(KEY)===HASH){gate.remove()}}catch(e){}
 document.getElementById('gateForm').addEventListener('submit',async e=>{
   e.preventDefault();
-  const v=document.getElementById('gatePass').value.trim().toLowerCase().replace(/\s+/g,' ');
+  const v=document.getElementById('gatePass').value.toLowerCase().replace(/\s+/g,'');
   if(!v)return;
   const h=await sha(v);
   if(h===HASH){try{localStorage.setItem(KEY,HASH);localStorage.setItem('mapa-del-mes-code',v)}catch(e){}gate.remove()}
